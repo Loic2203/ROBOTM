@@ -13,7 +13,7 @@ import pathlib
 # Templates
 from web.templates import HTML_TEMPLATE, ARCHIVE_TEMPLATE, PREVIEW_TEMPLATE
 
-# Chemin racine du projet (résout tous les problèmes de chemin)
+# Chemin racine du projet 
 PROJECT_ROOT = pathlib.Path(__file__).parent.parent.resolve()
 
 # Variables globales initialisées par register_routes()
@@ -32,9 +32,7 @@ def register_routes(app, vr, cfg, hs):
     THUMB_DIR = os.path.join(config.recording.output_dir, 'thumbs')
     os.makedirs(THUMB_DIR, exist_ok=True)
 
-    # ===============================================
     # ROUTES DE BASE (STREAMING & CONTRÔLE)
-    # ===============================================
 
     @app.route('/')
     def index():
@@ -107,9 +105,7 @@ def register_routes(app, vr, cfg, hs):
         video_recorder.capture_clip()
         return jsonify({"status": "ok", "message": "Clip capturé"})
 
-    # ===============================================
     # ROUTES ARCHIVES
-    # ===============================================
 
     @app.route('/archive')
     def archive():
@@ -190,9 +186,8 @@ def register_routes(app, vr, cfg, hs):
             return send_file(str(thumb_path), mimetype='image/jpeg')
         return "Miniature manquante", 404
 
-    # ===============================================
+
     # ROUTES LECTEUR VIDÉO HYBRIDE (Lecture + Frame-par-frame)
-    # ===============================================
 
     @app.route('/preview/<filename>')
     def preview_video(filename):
@@ -205,7 +200,7 @@ def register_routes(app, vr, cfg, hs):
     def serve_video(filename):
         """
         Route critique : permet la lecture fluide dans <video>
-        Gère MP4 natif + anciens AVI (compatibilité totale)
+     
         """
         video_path = PROJECT_ROOT / config.recording.output_dir / filename
         path_str = str(video_path.resolve())
@@ -225,7 +220,7 @@ def register_routes(app, vr, cfg, hs):
             path_str,
             mimetype=mimetype,
             as_attachment=False,
-            conditional=True,      # Supporte les requêtes range (barre de progression)
+            conditional=True,      # Supporte barre de progression
             max_age=0
         )
 

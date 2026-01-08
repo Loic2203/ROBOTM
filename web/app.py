@@ -38,8 +38,7 @@ class WebServer:
         """Arrête le serveur web"""
         self.running = False
         if self.server_thread:
-            # Pour s'assurer que le thread se termine proprement (mécanisme avancé)
-            # En pratique, le thread Flask Daemon s'arrête souvent avec le programme parent
+            # Pour s'assurer que le thread se termine proprement 
             self.server_thread.join(timeout=1) 
     
     def _run_server(self):

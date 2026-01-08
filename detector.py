@@ -78,14 +78,14 @@ class HailoDetector:
         self.running = True
         self.detection_thread = threading.Thread(target=self._run_detection_app, daemon=True)
         self.detection_thread.start()
-        print("✅ Détection Hailo démarrée en arrière-plan (sans fenêtre).")
+        print("Détection Hailo démarrée en arrière-plan (sans fenêtre).")
 
     def _run_detection_app(self):
         """Fonction cible pour le thread de l'application Hailo."""
         try:
             self.current_app.run()
         except Exception as e:
-            print(f"❌ Erreur d'exécution HailoApp: {e}")
+            print(f"Erreur d'exécution HailoApp: {e}")
             self.running = False
 
     def stop(self):
@@ -95,7 +95,7 @@ class HailoDetector:
                 self.current_app.stop()
                 print("🛑 Détecteur Hailo arrêté.")
             except Exception as e:
-                print(f"⚠️ Erreur lors de l'arrêt de HailoApp: {e}")
+                print(f"Erreur lors de l'arrêt de HailoApp: {e}")
             
             self.running = False
             if self.detection_thread and self.detection_thread.is_alive():

@@ -1,4 +1,3 @@
-
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
@@ -214,7 +213,7 @@ HTML_TEMPLATE = """
             </div>
             
             <button id="clipButton" class="btn clip" disabled onclick="handleClip()">
-                <i class="fas fa-bolt"></i> CLIP (5s Pre-Roll)
+                <i class="fas fa-bolt"></i> CLIP
             </button>
         </div>
     </div>
@@ -245,13 +244,38 @@ HTML_TEMPLATE = """
         
         function startRecording() { sendCommand('start_record'); }
         function stopRecording() { sendCommand('stop_record'); }
-        function captureClip() { sendCommand('capture_clip'); }
         function pauseRecording() { sendCommand('pause_record'); }
         function resumeRecording() { sendCommand('resume_record'); }
 
         function handleStart() { startRecording(); }
         function handleStop() { stopRecording(); }
-        function handleClip() { captureClip(); }
+        
+        // =======================================================
+        // VERSION SIMPLIFIÉE AVEC DÉLAI DE 7 SECONDES
+        // =======================================================
+        function handleClip() {
+            const clipBtn = document.getElementById('clipButton');
+            
+            // 1. Désactiver le bouton immédiatement
+            clipBtn.disabled = true;
+            clipBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> CREATION...';
+
+            // 2. Lancer la commande
+            sendCommand('capture_clip')
+                .catch(error => {
+                    console.error("Erreur lors de la capture du clip.");
+                })
+                .finally(() => {
+                    // 3. Le 'finally' s'exécute toujours, succès ou échec
+                    // On attend 7 secondes avant de réactiver le bouton
+                    setTimeout(() => {
+                        clipBtn.disabled = false;
+                        clipBtn.innerHTML = '<i class="fas fa-bolt"></i> CLIP';
+                        // On met à jour le status général pour s'assurer que l'état des autres boutons est correct
+                        updateStatus(); 
+                    }, 7000); // <-- LE DÉLAI EST MAINTENANT DE 10000ms (7 secondes)
+                });
+        }
         
         function handlePauseResume() {
             const statusText = document.getElementById('recordingStatusText').textContent;
@@ -280,11 +304,16 @@ HTML_TEMPLATE = """
                     pauseResumeBtn.innerHTML = `<i class="${statusData.pauseIcon}"></i> ${currentState === 'paused' ? 'REPRENDRE' : 'PAUSE'}`;
 
                     const isStopped = currentState === 'stopped';
+                    const clipBtn = document.getElementById('clipButton');
 
                     document.getElementById('startButton').disabled = !isStopped;
                     document.getElementById('stopButton').disabled = isStopped;
                     document.getElementById('pauseResumeButton').disabled = isStopped;
-                    document.getElementById('clipButton').disabled = isStopped;
+                    
+                    // On s'assure que le bouton clip est bien synchronisé, sauf s'il est déjà en cours de création
+                    if (!clipBtn.innerHTML.includes('spinner')) {
+                        clipBtn.disabled = isStopped;
+                    }
                 })
                 .catch(error => {
                     document.getElementById('recordingStatusText').textContent = 'Erreur Conn. !';
@@ -557,4 +586,3 @@ PREVIEW_TEMPLATE = """
 </body>
 </html>
 """
-

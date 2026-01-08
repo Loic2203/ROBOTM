@@ -1,4 +1,3 @@
- 
 """  
 Système de diffusion Hailo CSI TV-Like avec deux caméras  
 (Détection Hailo en Background sur Caméra 0, Suivi/Diffusion sur Caméra 1)
@@ -29,7 +28,7 @@ class HailoCSISystem:
         self.web_server = None  
         self.running = False  
         
-        # --- ÉLÉMENTS POUR PTZ PICAMERA2/APPSRC ---
+        # --- ÉLÉMENTS POUR PTZ ---
         self.ptz_camera = None      
         self.ptz_camera_running = False
         self.ptz_stream_thread = None 
@@ -39,15 +38,28 @@ class HailoCSISystem:
         self.ptz_frame = None       
         self.ptz_frame_lock = threading.Lock()  
 
-        # --- NOUVEAU: Variables pour le délestage CPU ---
+        # --- Variables pour le délestage CPU ---
         self.last_proc_time = 0.0
-        self.processing_fps = 10.0 # Traitement d'image lourd à 10 FPS max
+        self.processing_fps = 20.0 
           
-        # Servo  
+        # --- SERVO ---  
         self.kit = ServoKit(channels=16)  
         self.current_pan_angle = 90  
         self.current_tilt_angle = self.config.servo.fixed_tilt_angle
         self.current_zoom = 1.0  
+        
+        
+        # VARIABLES D'ÉTAT POUR LE SUIVI INTELLIGENT 
+      
+        hef_center = (self.detector.HEF_WIDTH // 2, self.detector.HEF_HEIGHT // 2)
+        self.smoothed_target_center = hef_center 
+        self.last_detection_time = 0.0
+        self.is_target_lost = True 
+        self.is_returning_to_center = False 
+        
+        # Variable pour détecter le dépassement (overshoot)
+        self.last_error_sign = 0 
+        
         
         Gst.init(None)
       
@@ -55,16 +67,13 @@ class HailoCSISystem:
         """Initialise tous les composants"""  
         print("🚀 Initialisation du système Hailo CSI TV-Like...")  
           
-        # 1. Démarrer le Détecteur Hailo (Caméra 0)
         self.detector.start()
         
-        # 2. Initialiser la caméra PTZ (Caméra 1) via Picamera2
         try:
             print("📷 Initialisation manuelle de la caméra PTZ (Caméra 1)...")
             self.ptz_camera = Picamera2(camera_num=1) 
             WIDTH, HEIGHT = self.config.recording.resolution
             
-            # Configuration en 1920x1080 (haute résolution du settings.py)
             config = self.ptz_camera.create_video_configuration(
                 main={"size": (WIDTH, HEIGHT), "format": "RGB888"}
             )
@@ -72,46 +81,35 @@ class HailoCSISystem:
             self.ptz_camera.start() 
             self.ptz_camera_running = True
             
-            time.sleep(1) # Délai de stabilisation
-            print("✅ Caméra PTZ stabilisée.")
+            time.sleep(1) 
+            print("Caméra PTZ stabilisée.")
             
-            # 3. Créer le pipeline PTZ GStreamer avec appsrc (source Python)
             if not self._create_ptz_pipeline():  
                 self.detector.stop()
                 self.ptz_camera.close()
                 return False
             
-            # 4. Démarrer le thread d'acquisition Picamera2 -> GStreamer (Appsrc)
             self.ptz_stream_thread = threading.Thread(target=self._run_ptz_stream, daemon=True)
             self.ptz_stream_thread.start()
             
         except Exception as e:
-            print(f"❌ Erreur critique lors de l'initialisation de la caméra PTZ (Caméra 1): {e}")
+            print(f" Erreur critique lors de l'initialisation de la caméra PTZ (Caméra 1): {e}")
             traceback.print_exc()
             self.detector.stop()
             return False
 
-        # 5. Initialiser recorder  
         self.video_recorder.initialize()  
-          
-        # 6. Démarrer serveur web  
         self.web_server = WebServer(self.video_recorder, self.config, self)  
         self.web_server.start()  
-          
-        # 7. Initialiser servo
         self.kit.servo[self.config.servo.pan_channel].angle = self.current_pan_angle
         self.kit.servo[self.config.servo.tilt_channel].angle = self.current_tilt_angle
-
-          
-        print("✅ Système initialisé - Deux caméras actives (Détection en Background)")  
+        print(" Système initialisé - Deux caméras actives")  
         return True  
       
     def _create_ptz_pipeline(self):  
-        """Pipeline GStreamer pour la haute (diffusion) utilisant appsrc comme source."""
+        """Pipeline GStreamer pour la caméra de diffusion utilisant appsrc."""
         try:  
             WIDTH, HEIGHT = self.config.recording.resolution
-            
-            # Appsrc est le point d'entrée du thread Python
             pipeline_str = f"""  
                 appsrc name=ptz_source is-live=true format=GST_FORMAT_TIME block=true ! 
                 video/x-raw,format=RGB,width={WIDTH},height={HEIGHT},framerate=30/1 !   
@@ -119,228 +117,197 @@ class HailoCSISystem:
                 video/x-raw,format=BGR !   
                 appsink name=ptz_sink emit-signals=true sync=false  
             """  
-            
             self.ptz_pipeline = Gst.parse_launch(pipeline_str)  
-            
             appsink = self.ptz_pipeline.get_by_name("ptz_sink")  
             appsink.connect("new-sample", self._on_ptz_sample)  
-            
             self.ptz_pipeline.set_state(Gst.State.PLAYING) 
-            print("✅ Pipeline haute (diffusion) créé")  
+            print("✅ Pipeline de diffusion créé")  
             return True  
         except Exception as e:  
-            print(f"❌ Erreur pipeline haute: {e}")  
+            print(f"❌ Erreur pipeline de diffusion: {e}")  
             traceback.print_exc()
             return False  
     
     def _run_ptz_stream(self):
         """Thread pour l'acquisition des frames de Picamera2 et l'envoi vers appsrc."""
-        print("picamera_process started")
         appsrc = self.ptz_pipeline.get_by_name("ptz_source")
-        
         try:
-            # --- CORRECTION STABILITÉ (WARMUP) ---
             self.ptz_camera.capture_array("main") 
-            print("✅ Picamera2 capture initial réussie (Warmup).")
-        except Exception as e:
-            if self.running:
-                print(f"❌ Erreur CRITIQUE Picamera2 (Warmup): {e}")
-                traceback.print_exc() 
+        except Exception:
             self.ptz_camera_running = False
-            if appsrc:
-                 appsrc.emit("end-of-stream")
-            print("🛑 Thread de stream PTZ arrêté (échec du warmup).")
             return
 
-        # Boucle principale
         while self.running and self.ptz_camera_running:
             try:
                 frame_array = self.ptz_camera.capture_array("main")
-                
                 if frame_array is None:
                     time.sleep(0.001)
                     continue
-                
-                data = frame_array.tobytes()
-                buffer = Gst.Buffer.new_wrapped(data)
-                
+                buffer = Gst.Buffer.new_wrapped(frame_array.tobytes())
                 appsrc.emit("push-buffer", buffer)
-                
                 time.sleep(1.0 / self.config.recording.fps)
-
-            except Exception as e:
-                if self.running:
-                    print(f"❌ Erreur CRITIQUE dans le thread de stream PTZ (Boucle): {e}") 
-                    traceback.print_exc() 
+            except Exception:
                 break
-            
-        # Arrêt
-        if appsrc:
-            appsrc.emit("end-of-stream")
+        if appsrc: appsrc.emit("end-of-stream")
         self.ptz_camera_running = False
-        print("🛑 Thread de stream PTZ arrêté.")
 
     def _on_ptz_sample(self, sink):  
-        """Callback GStreamer pour frames de la haute (applique zoom/crop basé sur détection, met à jour recorder, contrôle servo)"""  
+        """Callback GStreamer avec logique de suivi intelligente."""  
         sample = sink.emit("pull-sample")  
-        if sample:  
-            buffer = sample.get_buffer()  
-            caps = sample.get_caps()  
-            height = caps.get_structure(0).get_value("height")  
-            width = caps.get_structure(0).get_value("width")  
-            success, map_info = buffer.map(Gst.MapFlags.READ)  
-            if success:  
-                try:
-                    raw_frame = np.frombuffer(map_info.data, dtype=np.uint8).reshape((height, width, 3))  
-                    raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_RGB2BGR)
+        if not sample: return Gst.FlowReturn.OK
 
-                    detection_status = self.detector.get_detection_status()
-                    target_cx_hef, target_cy_hef = detection_status['target_center']
-                    hef_w, hef_h = detection_status['hef_resolution']
-                    
-                    # --- LOGIQUE SERVO (À 30 FPS pour un suivi fluide) ---
-                    center_error_x_hef = target_cx_hef - hef_w // 2 
-                    
-                    # 1. PAN FLUID
-                    error_ratio = center_error_x_hef / (hef_w / 2) 
-                    range_angle = self.config.servo.max_angle - self.config.servo.min_angle
-                    target_angle = 90 + (error_ratio * (range_angle / 2))
-                    
-                    smoothing = self.config.servo.smoothing_factor
-                    new_pan_angle = self.current_pan_angle + smoothing * (target_angle - self.current_pan_angle) 
-                    new_pan_angle = max(self.config.servo.min_angle, min(self.config.servo.max_angle, new_pan_angle))  
-                    
-                    hysteresis_norm = self.config.servo.hysteresis_pixels / (hef_w / 2)
-                    
-                    if abs(error_ratio) > hysteresis_norm:
-                        self.kit.servo[self.config.servo.pan_channel].angle = int(new_pan_angle)  
-                        self.current_pan_angle = new_pan_angle  
-                        
-                    # 2. ZOOM/CROP Numérique (Calcul seulement, pas l'application coûteuse)
-                    center_error_x_abs = abs(center_error_x_hef) 
-                    desired_zoom = 1.0 + (center_error_x_abs / (hef_w / 2)) * (self.config.zoom.max_zoom - 1)  
-                    self.current_zoom = min(self.config.zoom.max_zoom, max(self.config.zoom.min_zoom, desired_zoom))  
-                    
-                    target_cx_ptz = (target_cx_hef / hef_w) * width
-                    target_cy_ptz = (target_cy_hef / hef_h) * height
+        buffer = sample.get_buffer()  
+        caps = sample.get_caps()  
+        height = caps.get_structure(0).get_value("height")  
+        width = caps.get_structure(0).get_value("width")  
+        success, map_info = buffer.map(Gst.MapFlags.READ)  
+        if not success: return Gst.FlowReturn.OK
+            
+        try:
+            detection_status = self.detector.get_detection_status()
+            hef_w, hef_h = detection_status['hef_resolution']
+            current_time = time.time()
 
-                    # --- LOGIQUE D'IMAGE (À 10 FPS pour le délestage CPU) ---
-                    current_time = time.time()
-                    if (current_time - self.last_proc_time) >= (1.0 / self.processing_fps):
-                        
-                        # 3. Application du Zoom et du Crop (coûteux)
-                        zoomed_frame = self._apply_zoom_crop(raw_frame, self.current_zoom, target_cx_ptz, target_cy_ptz)  
-                          
-                        # 4. Ajouter infos (coûteux)
-                        final_frame = self._add_frame_info(zoomed_frame)  
-                          
-                        # 5. Mettre à jour recorder et stream (mise à jour)
-                        with self.ptz_frame_lock:
-                            self.ptz_frame = final_frame
-                        self.video_recorder.update_frame(final_frame)  
-                        
-                        self.last_proc_time = current_time
-                    
-                    # Si on ne traite pas, le recorder et le stream continuent d'utiliser le dernier self.ptz_frame.
+            # --- 1. GESTION DE LA CIBLE (DÉTECTION / ATTENTE 2S / RETOUR) ---
+            target_detected = detection_status['person_count'] > 0 or detection_status['ball_detected']
 
-                except Exception as e:
-                    print(f"❌ Erreur lors du traitement du frame PTZ (Callback): {e}")
-                    traceback.print_exc()
-                finally:
-                    buffer.unmap(map_info)  
+            if target_detected:
+                self.last_detection_time = current_time
+                self.is_target_lost = False
+                self.is_returning_to_center = False
+                current_target_center = detection_status['target_center']
+            else:
+                self.is_target_lost = True
+                time_since_lost = current_time - self.last_detection_time
+                
+                if time_since_lost < self.config.servo.target_lost_wait_duration:
+                    # Phase d'attente (2s) : On reste stabilisé sur la dernière position connue
+                    current_target_center = self.smoothed_target_center
+                else:
+                    # Phase de retour fluide vers le centre
+                    self.is_returning_to_center = True
+                    current_target_center = (hef_w // 2, hef_h // 2)
+
+            # --- 2. LISSAGE DE LA POSITION (TEMPORISATION DU CENTRE DE GRAVITÉ) ---
+            sx, sy = self.smoothed_target_center
+            tx, ty = current_target_center
+            
+            # Vitesse de lissage (alpha) plus lente si on cherche le centre
+            alpha = self.config.servo.return_to_center_speed if self.is_returning_to_center else self.config.servo.target_smoothing_factor
+            
+            sx += alpha * (tx - sx)
+            sy += alpha * (ty - sy)
+            self.smoothed_target_center = (sx, sy)
+
+            # --- 3. MODULATION DE LA VITESSE ET DÉTECTION DÉPASSEMENT ---
+            center_error_x_hef = self.smoothed_target_center[0] - hef_w / 2
+            error_abs = abs(center_error_x_hef)
+
+            # Détection de l'overshoot (changement de signe de l'erreur)
+            current_sign = 1 if center_error_x_hef > 0 else -1 if center_error_x_hef < 0 else 0
+            has_overshot = (self.last_error_sign != 0 and current_sign != 0 and self.last_error_sign != current_sign)
+            self.last_error_sign = current_sign
+
+            slow_thresh = self.config.servo.slow_move_threshold_pixels
+            slow_smooth = self.config.servo.slow_smoothing_factor
+            fast_smooth = self.config.servo.fast_smoothing_factor
+            
+            if has_overshot:
+                # Si on a dépassé, on revient très lentement
+                dynamic_smoothing = slow_smooth 
+            elif error_abs < slow_thresh:
+                # Déplacement court -> lent
+                dynamic_smoothing = slow_smooth
+            else:
+                # Déplacement long -> Lent / Vite / Lent
+                progress = min(1.0, (error_abs - slow_thresh) / (hef_w / 2 - slow_thresh))
+                dynamic_smoothing = slow_smooth + progress * (fast_smooth - slow_smooth)
+
+            # --- 4. COMMANDE DU SERVO (CORRECTE ET FLUIDE) ---
+            target_angle = 90 + (center_error_x_hef / (hef_w / 2)) * (self.config.servo.max_angle - 90)
+            new_pan_angle = self.current_pan_angle + dynamic_smoothing * (target_angle - self.current_pan_angle)
+            new_pan_angle = max(self.config.servo.min_angle, min(self.config.servo.max_angle, new_pan_angle))
+            
+            if abs(self.current_pan_angle - new_pan_angle) > 0.05:
+                self.kit.servo[self.config.servo.pan_channel].angle = int(new_pan_angle)
+                self.current_pan_angle = new_pan_angle
+
+            # --- 5. IMAGE ET ENREGISTREMENT ---
+            if (current_time - self.last_proc_time) >= (1.0 / self.processing_fps):
+                raw_frame = np.frombuffer(map_info.data, dtype=np.uint8).reshape((height, width, 3))
+                raw_frame = cv2.cvtColor(raw_frame, cv2.COLOR_RGB2BGR)
+                
+                # Conversion coordonnées pour Zoom/Crop
+                target_cx_ptz = (self.smoothed_target_center[0] / hef_w) * width
+                target_cy_ptz = (self.smoothed_target_center[1] / hef_h) * height
+                
+                desired_zoom = 1.0 + (error_abs / (hef_w / 2)) * (self.config.zoom.max_zoom - 1.0)
+                self.current_zoom = min(self.config.zoom.max_zoom, max(self.config.zoom.min_zoom, desired_zoom))
+
+                zoomed_frame = self._apply_zoom_crop(raw_frame, self.current_zoom, target_cx_ptz, target_cy_ptz)  
+                final_frame = self._add_frame_info(zoomed_frame)  
+                
+                with self.ptz_frame_lock:
+                    self.ptz_frame = final_frame
+                self.video_recorder.update_frame(final_frame)  
+                self.last_proc_time = current_time
+
+        except Exception as e:
+            traceback.print_exc()
+        finally:
+            buffer.unmap(map_info)  
         return Gst.FlowReturn.OK  
       
     def _apply_zoom_crop(self, frame, zoom, target_cx, target_cy):  
-        """Applique zoom/crop centré sur cible"""  
         height, width = frame.shape[:2]  
         crop_w, crop_h = int(width / zoom), int(height / zoom)  
-          
         start_x = max(0, min(width - crop_w, int(target_cx - crop_w / 2)))  
         start_y = max(0, min(height - crop_h, int(target_cy - crop_h / 2)))  
-          
         cropped = frame[int(start_y):int(start_y + crop_h), int(start_x):int(start_x + crop_w)]  
         return cv2.resize(cropped, (width, height), interpolation=cv2.INTER_LINEAR)  
       
     def _add_frame_info(self, frame):  
-        """Ajoute infos sur frame"""  
         frame_with_info = frame.copy()  
         height, width = frame.shape[:2]  
-        
         status = self.detector.get_detection_status()
-        
-        # ... (le code d'overlay reste inchangé) ...
-        cv2.putText(frame_with_info, f"{width}x{height} | HAILO TV", (10, height - 30),   
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)  
-        cv2.putText(frame_with_info, f"{time.strftime('%H:%M:%S')}", (10, height - 10),   
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)  
-          
-        cv2.putText(frame_with_info, f"Mode: {status['mode']}", (10, 30),   
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)  
-        cv2.putText(frame_with_info, f"Zoom: {self.current_zoom:.1f}x", (10, 60),   
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)  
-        cv2.putText(frame_with_info, f"Pan Angle: {int(self.current_pan_angle)}°", (10, 90),   
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)  
-          
+        cv2.putText(frame_with_info, f"{width}x{height} | HAILO TV", (10, height - 30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)  
+        cv2.putText(frame_with_info, f"Mode: {status['mode']}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)  
+        cv2.putText(frame_with_info, f"Zoom: {self.current_zoom:.1f}x", (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)  
         return frame_with_info  
       
     def start(self):  
-        if not self.initialize():  
-            return False  
-          
+        if not self.initialize(): return False  
         self.running = True  
-          
         self.ptz_loop = GLib.MainLoop()  
-        ptz_gstreamer_thread = threading.Thread(target=self.ptz_loop.run, daemon=True)  
-        ptz_gstreamer_thread.start()  
-          
-        print(f"✅ Systèmes démarrés - Interface: {self.config.get_server_url()}")  
-        while self.running:  
-            time.sleep(1) 
+        threading.Thread(target=self.ptz_loop.run, daemon=True).start()  
+        while self.running: time.sleep(1) 
       
     def stop(self):  
-        print("\n🛑 Arrêt...")  
         self.running = False  
-        
-        # 1. Arrêt Picamera2 et du thread de stream
         self.ptz_camera_running = False
         if self.ptz_stream_thread and self.ptz_stream_thread.is_alive():
             self.ptz_stream_thread.join(timeout=2)
         if self.ptz_camera:
-             try:
-                self.ptz_camera.close() 
-             except:
-                pass
-
-        # 2. Arrêt du détecteur Hailo
+             try: self.ptz_camera.close() 
+             except: pass
         self.detector.stop() 
-        
-        # 3. Arrêt du pipeline PTZ GStreamer
-        if self.ptz_loop:  
-            self.ptz_loop.quit()  
-        if self.ptz_pipeline:  
-            self.ptz_pipeline.set_state(Gst.State.NULL)  
-            
-        # 4. Arrêt des autres composants
-        if self.web_server:  
-            self.web_server.stop()  
+        if self.ptz_loop: self.ptz_loop.quit()  
+        if self.ptz_pipeline: self.ptz_pipeline.set_state(Gst.State.NULL)  
+        if self.web_server: self.web_server.stop()  
         self.video_recorder.cleanup()  
-        print("✅ Arrêté")  
   
 def signal_handler(sig, frame):  
-    if 'system' in globals():  
-        system.stop()  
+    global system
+    if system: system.stop()  
   
 if __name__ == "__main__":  
     system = None
     try:
+        system = HailoCSISystem()
         signal.signal(signal.SIGINT, signal_handler)  
         signal.signal(signal.SIGTERM, signal_handler)  
-        atexit.register(lambda: system.stop() if 'system' in globals() and system.running else None)  
-      
-        system = HailoCSISystem()  
+        atexit.register(lambda: system.stop() if system and system.running else None)  
         system.start()
-    except Exception as e:
-        print(f"❌ Erreur critique non gérée: {e}")
-        if system and system.running:
-            system.stop()
+    except Exception:
         traceback.print_exc()
+        if system: system.stop()

@@ -86,9 +86,9 @@ class VideoRecorder:
                                       frame_size)
         
         if self.writer.isOpened():
-             print(f"✅ Enregistrement démarré: {path} (Codec: {self.cfg.recording.codec})")
+             print(f" Enregistrement démarré: {path} (Codec: {self.cfg.recording.codec})")
         else:
-             print(f"❌ Erreur: Impossible d'ouvrir VideoWriter pour {path}. Codec/Extension incorrect.")
+             print(f" Erreur: Impossible d'ouvrir VideoWriter pour {path}. Codec/Extension incorrect.")
 
 
     def start_recording(self):
@@ -124,9 +124,9 @@ class VideoRecorder:
         """Fonction appelée à l'arrêt du système."""
         self.stop_recording()
 
-    # ===============================================
+    
     # FONCTIONS D'ARCHIVAGE (Miniatures & Frame)
-    # ===============================================
+    
 
     def generate_thumbnail(self, video_path, thumb_path):
         """Génère une miniature à partir de la première frame de la vidéo."""
@@ -174,9 +174,9 @@ class VideoRecorder:
         else:
             return None, f"Frame {frame_pos} non trouvée"
         
-    # ===============================================
+   
     # FONCTIONS CLIP 
-    # ===============================================
+   
 
     def capture_clip(self):
         if self.clip_running:
@@ -201,7 +201,7 @@ class VideoRecorder:
                         live_frames.append(self.current_frame.copy())
                 time.sleep(0.01)  
 
-            # On s'assure de n'avoir que 160 frames du passé + 20 frames live (6 secondes @ 30 FPS)
+            # On s'assure de n'avoir que 160 frames du passé + 20 frames live (10 secondes)
             all_frames = saved_buffer[-160:] + live_frames 
 
             if len(all_frames) < 30:
@@ -221,7 +221,7 @@ class VideoRecorder:
                 for f in all_frames:
                     out.write(f)
                 out.release()
-                print(f"✅ CLIP SAUVEGARDÉ EN 2 SECONDES → {path}")
+                print(f" CLIP SAUVEGARDÉ EN 2 SECONDES → {path}")
             else:
                  print(f"❌ Erreur: Impossible d'ouvrir VideoWriter pour CLIP.")
 

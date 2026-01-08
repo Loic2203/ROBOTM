@@ -16,7 +16,7 @@ class WebConfig:
 @dataclass
 class RecordingConfig:
     """Configuration Enregistrement"""
-    fps: int = 30
+    fps: int = 20  
     resolution: tuple = (1920, 1080)  
     codec: str = "mp4v"
     file_extension: str = ".mp4"
@@ -34,11 +34,26 @@ class ServoConfig:
     """Configuration Servo (PTZ)"""
     pan_channel: int = 0         # Canal pour le mouvement horizontal (Pan)
     tilt_channel: int = 1        # Canal pour le mouvement vertical (Tilt)
-    min_angle: int = 0
-    max_angle: int = 180
+    min_angle: int = 10
+    max_angle: int = 170
     fixed_tilt_angle: int = 120  # Angle de base pour le tilt
-    smoothing_factor: float = 0.3 
-    hysteresis_pixels: int = 25  # Seuil pour bouger le servo (basé sur 640x640)
+
+    # PARAMÈTRES POUR UN SUIVI INTELLIGENT ET CINÉMATOGRAPHIQUE
+    
+    target_lost_wait_duration: float = 2.0  
+    return_to_center_speed: float = 0.005  
+    
+    #Facteur de lissage de la position de la cible (quand elle est détectée).
+    target_smoothing_factor: float = 0.08  
+    
+    # [VITESSE] Seuil en pixels (sur 640px) pour différencier un mouvement court d'un mouvement long.
+    slow_move_threshold_pixels: int = 40 
+    
+    # [VITESSE] Vitesse pour les mouvements courts (déplacement subtil).
+    slow_smoothing_factor: float = 0.08
+    
+    # [VITESSE] Vitesse maximale pour les longs déplacements (suivi réactif).
+    fast_smoothing_factor: float = 0.25
 
 @dataclass
 class ZoomConfig:
