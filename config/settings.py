@@ -26,7 +26,7 @@ class RecordingConfig:
 class HailoConfig:
     """Configuration Hailo/Détection"""
     input_source: str = 'rpi:0'  
-    hef_path: str = '/home/jerome/Documents/projet_yolo_v2/yolo_models/yolo11n.hef'
+    hef_path: str = '/home/jerome/Documents/projet_yolo_v2/yolo_models/yolo11m.hef'
     frame_skip: int = 2
 
 @dataclass
@@ -34,11 +34,11 @@ class ServoConfig:
     """Configuration Servo (PTZ)"""
     pan_channel: int = 0         # Canal pour le mouvement horizontal (Pan)
     tilt_channel: int = 1        # Canal pour le mouvement vertical (Tilt)
-    min_angle: int = 10
-    max_angle: int = 170
+    min_angle: int = 20
+    max_angle: int = 160
     fixed_tilt_angle: int = 120  # Angle de base pour le tilt
 
-    # PARAMÈTRES POUR UN SUIVI INTELLIGENT ET CINÉMATOGRAPHIQUE
+    # PARAMÈTRES POUR UN SUIVI INTELLIGENT 
     
     target_lost_wait_duration: float = 2.0  
     return_to_center_speed: float = 0.005  
@@ -54,6 +54,8 @@ class ServoConfig:
     
     # [VITESSE] Vitesse maximale pour les longs déplacements (suivi réactif).
     fast_smoothing_factor: float = 0.25
+    pan_offset_right: float = -5.0
+    pan_offset_left: float = 10.0
 
 @dataclass
 class ZoomConfig:

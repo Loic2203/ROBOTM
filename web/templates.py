@@ -251,7 +251,7 @@ HTML_TEMPLATE = """
         function handleStop() { stopRecording(); }
         
         // =======================================================
-        // VERSION SIMPLIFIÉE AVEC DÉLAI DE 7 SECONDES
+        // VERSION SIMPLIFIÉE AVEC DÉLAI DE 10 SECONDES
         // =======================================================
         function handleClip() {
             const clipBtn = document.getElementById('clipButton');
@@ -273,7 +273,7 @@ HTML_TEMPLATE = """
                         clipBtn.innerHTML = '<i class="fas fa-bolt"></i> CLIP';
                         // On met à jour le status général pour s'assurer que l'état des autres boutons est correct
                         updateStatus(); 
-                    }, 7000); // <-- LE DÉLAI EST MAINTENANT DE 10000ms (7 secondes)
+                    }, 7000); // <-- LE DÉLAI EST MAINTENANT DE 10000ms (10 secondes)
                 });
         }
         
